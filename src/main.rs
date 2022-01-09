@@ -5,7 +5,6 @@ use std::ops::Index;
 use std::slice::from_raw_parts;
 use std::sync::Arc;
 use std::time::Instant;
-use bytemuck::cast_slice;
 use egui::{ScrollArea, TextEdit, TextStyle};
 use egui_winit_vulkano::Gui;
 use image::{GenericImageView, ImageFormat};
