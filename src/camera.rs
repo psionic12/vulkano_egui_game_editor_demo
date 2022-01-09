@@ -1,6 +1,3 @@
-use std::ops::Neg;
-use ultraviolet::{Rotor3, Slerp};
-
 pub struct Transform {
     pub position: ultraviolet::Vec3,
     pub rotation: ultraviolet::Vec3,
@@ -38,14 +35,14 @@ impl Camera {
         let transform = &self.transform;
         let mut view = ultraviolet::Mat4::identity();
         view.translate(&(-transform.position));
-        view = ultraviolet::Mat4::from_euler_angles(self.transform.rotation.x,
-                                                    self.transform.rotation.y,
-                                                    self.transform.rotation.z) * view;
+        view = ultraviolet::Mat4::from_euler_angles(
+            self.transform.rotation.x,
+            self.transform.rotation.y,
+            self.transform.rotation.z,
+        ) * view;
 
-        let projection = ultraviolet::projection::perspective_vk( self.fov,
-                                                                 800.0/600.0,
-                                                                 0.1,
-                                                                 100.0);
+        let projection =
+            ultraviolet::projection::perspective_vk(self.fov, 800.0 / 600.0, 0.1, 100.0);
         (view, projection)
     }
 }

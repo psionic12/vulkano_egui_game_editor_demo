@@ -1,17 +1,17 @@
 use std::sync::Arc;
-use vulkano::device::{Device, Queue};
 use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
+use vulkano::device::DeviceExtensions;
+use vulkano::device::Features;
+use vulkano::device::{Device, Queue};
+use vulkano::format::Format;
+use vulkano::image::view::ImageView;
 use vulkano::image::{AttachmentImage, ImageAccess, ImageUsage, SwapchainImage};
 use vulkano::instance::Instance;
-use vulkano::swapchain::{Surface, Swapchain};
-use vulkano::Version;
-use vulkano::device::Features;
-use vulkano::format::Format;
-use vulkano_win::VkSurfaceBuild;
-use vulkano::device::DeviceExtensions;
-use vulkano::image::view::ImageView;
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::render_pass::{Framebuffer, RenderPass};
+use vulkano::swapchain::{Surface, Swapchain};
+use vulkano::Version;
+use vulkano_win::VkSurfaceBuild;
 use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowBuilder};
 
@@ -77,14 +77,10 @@ impl VulkanDevice {
             ..DeviceExtensions::none()
         };
         let (physical_device, graphic_queue_family) = PhysicalDevice::enumerate(&instance)
-            .filter(|&p| {
-                p.supported_extensions().is_superset_of(&device_extensions)
-            })
+            .filter(|&p| p.supported_extensions().is_superset_of(&device_extensions))
             .filter_map(|p| {
                 p.queue_families()
-                    .find(|&q| {
-                        q.supports_graphics() && surface.is_supported(q).unwrap_or(false)
-                    })
+                    .find(|&q| q.supports_graphics() && surface.is_supported(q).unwrap_or(false))
                     .map(|q| (p, q))
             })
             .min_by_key(|(p, _)| {
@@ -102,9 +98,9 @@ impl VulkanDevice {
         let mut queue_families_and_priorities = Vec::new();
         queue_families_and_priorities.push((graphic_queue_family, 1.0));
 
-        let transfer_queue_family = physical_device.queue_families().find(|&q| {
-            q.explicitly_supports_transfers()
-        });
+        let transfer_queue_family = physical_device
+            .queue_families()
+            .find(|&q| q.explicitly_supports_transfers());
 
         if let Some(transfer_queue_family) = transfer_queue_family {
             queue_families_and_priorities.push((transfer_queue_family, 1.0));
@@ -128,14 +124,14 @@ impl VulkanDevice {
                 .union(&device_extensions),
             queue_families_and_priorities.iter().cloned(),
         )
-            .unwrap();
+        .unwrap();
         let render_queue = queues.next().unwrap();
         let transfer_queue = if let Some(transfer_queue) = queues.next() {
             transfer_queue
         } else {
             render_queue.clone()
         };
-        let (mut swap_chain, images) = {
+        let (swap_chain, images) = {
             let caps = surface.capabilities(physical_device).unwrap();
             let composite_alpha = caps.supported_composite_alpha.iter().next().unwrap();
             let format = caps.supported_formats[0].0;
@@ -152,25 +148,26 @@ impl VulkanDevice {
         };
 
         let render_pass = vulkano::ordered_passes_renderpass!(
-        device.clone(),
-        attachments: {
-            color: {
-                load: Clear,
-                store: Store,
-                format: swap_chain.format(),
-                samples: 1,
+            device.clone(),
+            attachments: {
+                color: {
+                    load: Clear,
+                    store: Store,
+                    format: swap_chain.format(),
+                    samples: 1,
+                },
+                depth: {
+                    load: Clear,
+                    store: DontCare,
+                    format: Format::D16_UNORM,
+                    samples: 1,
+                }
             },
-            depth: {
-                load: Clear,
-                store: DontCare,
-                format: Format::D16_UNORM,
-                samples: 1,
-            }
-        },
-        passes: [
-                { color: [color], depth_stencil: {depth}, input: [] },
-                { color: [color], depth_stencil: {}, input: [] }]
-    ).unwrap();
+            passes: [
+                    { color: [color], depth_stencil: {depth}, input: [] },
+                    { color: [color], depth_stencil: {}, input: [] }]
+        )
+        .unwrap();
 
         let mut viewport = Viewport {
             origin: [0.0, 0.0],
@@ -183,9 +180,10 @@ impl VulkanDevice {
 
         let depth_buffer = ImageView::new(
             AttachmentImage::transient(device.clone(), dimensions, Format::D16_UNORM).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
-        let mut frame_buffers = images
+        let frame_buffers = images
             .iter()
             .map(|image| {
                 let view = ImageView::new(image.clone()).unwrap();

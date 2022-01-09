@@ -1,35 +1,31 @@
-use std::collections::HashMap;
 use std::io::{BufReader, Cursor};
-use std::mem::size_of;
-use std::ops::Index;
-use std::slice::from_raw_parts;
-use std::sync::Arc;
+
 use std::time::Instant;
-use egui::{ScrollArea, TextEdit, TextStyle};
+
 use egui_winit_vulkano::Gui;
-use image::{GenericImageView, ImageFormat};
+use image::ImageFormat;
 use tobj::LoadOptions;
-use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, CpuBufferPool, ImmutableBuffer, TypedBufferAccess};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, SecondaryCommandBuffer, SubpassContents};
+use vulkano::buffer::{BufferUsage, ImmutableBuffer, TypedBufferAccess};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, SubpassContents};
+use vulkano::descriptor_set::PersistentDescriptorSet;
+use vulkano::image::view::ImageView;
+use vulkano::image::{ImageAccess, ImageDimensions, ImmutableImage, MipmapsCount};
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::vertex_input::BuffersDefinition;
 use vulkano::pipeline::graphics::viewport::ViewportState;
 use vulkano::pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint};
 use vulkano::render_pass::Subpass;
-use vulkano::swapchain::{AcquireError, SwapchainCreationError};
-use vulkano::{SafeDeref, swapchain, sync};
-use vulkano::descriptor_set::PersistentDescriptorSet;
-use vulkano::image::{ImageAccess, ImageDimensions, ImmutableImage, MipmapsCount};
-use vulkano::image::view::ImageView;
 use vulkano::sampler::{Filter, MipmapMode, Sampler, SamplerAddressMode};
-use vulkano::shader::ShaderModule;
-use vulkano::sync::{FenceSignalFuture, FlushError, GpuFuture};
+use vulkano::swapchain::AcquireError;
+use vulkano::{swapchain, sync};
+
 use vulkano::format::Format;
 use vulkano::pipeline::graphics::depth_stencil::DepthStencilState;
-use winit::event::{DeviceEvent, DeviceId, ElementState, Event, MouseButton, VirtualKeyCode, WindowEvent};
-use winit::event::WindowEvent::KeyboardInput;
+use vulkano::sync::{FlushError, GpuFuture};
+use winit::event::{DeviceEvent, ElementState, Event, MouseButton, VirtualKeyCode, WindowEvent};
+
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::Window;
+
 use crate::camera::Camera;
 use vulkan_device::VulkanDevice;
 
@@ -65,48 +61,53 @@ fn main() {
     let cursor = Cursor::new(obj);
 
     let mut reader = BufReader::new(cursor);
-    let (models, materials)
-        = tobj::load_obj_buf(&mut reader,
-                             &LoadOptions {
-                                 single_index: true,
-                                 triangulate: true,
-                                 ignore_points: false,
-                                 ignore_lines: false,
-                             },
-                             |_| { Err(tobj::LoadError::OpenFileFailed) },
-    ).unwrap();
+    let (models, _materials) = tobj::load_obj_buf(
+        &mut reader,
+        &LoadOptions {
+            single_index: true,
+            triangulate: true,
+            ignore_points: false,
+            ignore_lines: false,
+        },
+        |_| Err(tobj::LoadError::OpenFileFailed),
+    )
+    .unwrap();
 
     let (vertex_buffer, vertex_future) = ImmutableBuffer::from_iter(
         models.first().unwrap().mesh.positions.iter().cloned(),
         BufferUsage::vertex_buffer_transfer_destination(),
         render_device.get_transfer_queue(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let (normal_buffer, normal_future) = ImmutableBuffer::from_iter(
         models.first().unwrap().mesh.normals.iter().cloned(),
         BufferUsage::vertex_buffer_transfer_destination(),
         render_device.get_transfer_queue(),
-    ).unwrap();
-
+    )
+    .unwrap();
 
     let (texcoords_buffer, texcoords_future) = ImmutableBuffer::from_iter(
         models.first().unwrap().mesh.texcoords.iter().cloned(),
         BufferUsage::vertex_buffer_transfer_destination(),
         render_device.get_transfer_queue(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let (index_buffer, index_future) = ImmutableBuffer::from_iter(
         models.first().unwrap().mesh.indices.iter().cloned(),
         BufferUsage::index_buffer_transfer_destination(),
         render_device.get_transfer_queue(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let (texture, tex_future) = {
         let png_bytes = include_bytes!("cube_texture.png").to_vec();
         let cursor = Cursor::new(png_bytes);
 
-        let mut reader = image::io::Reader::with_format(cursor, ImageFormat::Png)
-            .decode().unwrap();
+        let reader = image::io::Reader::with_format(cursor, ImageFormat::Png)
+            .decode()
+            .unwrap();
         let image_data = reader.flipv().into_rgba8();
         let dimensions = ImageDimensions::Dim2d {
             width: image_data.width(),
@@ -114,14 +115,14 @@ fn main() {
             array_layers: 1,
         };
 
-        let (image, future)
-            = ImmutableImage::from_iter(
+        let (image, future) = ImmutableImage::from_iter(
             image_data.iter().cloned(),
             dimensions,
             MipmapsCount::One,
             Format::R8G8B8A8_SRGB,
             render_device.get_transfer_queue(),
-        ).unwrap();
+        )
+        .unwrap();
         (ImageView::new(image).unwrap(), future)
     };
 
@@ -137,14 +138,16 @@ fn main() {
         1.0,
         0.0,
         0.0,
-    ).unwrap();
+    )
+    .unwrap();
 
     let init_future = vertex_future
         .join(normal_future)
         .join(texcoords_future)
         .join(index_future)
         .join(tex_future)
-        .then_signal_fence_and_flush().unwrap();
+        .then_signal_fence_and_flush()
+        .unwrap();
 
     mod vs {
         vulkano_shaders::shader! {
@@ -215,10 +218,12 @@ Vulkan(o) is hard, that I know...
 "#;
 
     let pipeline = GraphicsPipeline::start()
-        .vertex_input_state(BuffersDefinition::new()
-            .vertex::<Position>()
-            .vertex::<Normal>()
-            .vertex::<Texture>())
+        .vertex_input_state(
+            BuffersDefinition::new()
+                .vertex::<Position>()
+                .vertex::<Normal>()
+                .vertex::<Texture>(),
+        )
         .vertex_shader(vs.entry_point("main").unwrap(), ())
         .input_assembly_state(InputAssemblyState::new())
         .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
@@ -239,7 +244,7 @@ Vulkan(o) is hard, that I know...
     let set = set_builder.build().unwrap();
 
     let mut previous_frame_end = Some(init_future.boxed());
-    let mut start = Instant::now();
+    let start = Instant::now();
 
     let mut camera = Camera::default();
     camera.transform.position = ultraviolet::Vec3::new(0.0, 2.0, 5.0);
@@ -249,67 +254,81 @@ Vulkan(o) is hard, that I know...
     let mut a_pressed = ElementState::Released;
     let mut d_pressed = ElementState::Released;
     let mut lb_pressed = ElementState::Released;
-    let mut rb_pressed = ElementState::Released;
+    let _rb_pressed = ElementState::Released;
 
     let camera_speed = 0.05;
     let front = ultraviolet::Vec3::new(0.0, 0.0, -1.0);
     let right = ultraviolet::Vec3::new(1.0, 0.0, 0.0);
-    let up = ultraviolet::Vec3::new(0.0, 1.0, 0.0);
+    let _up = ultraviolet::Vec3::new(0.0, 1.0, 0.0);
 
-    let mut code = CODE.to_owned();
-    let mut gui = Gui::new_with_subpass(render_device.get_surface(), render_device.get_render_queue(), Subpass::from(render_device.get_render_pass(), 1).unwrap());
+    let _code = CODE.to_owned();
+    let mut gui = Gui::new_with_subpass(
+        render_device.get_surface(),
+        render_device.get_render_queue(),
+        Subpass::from(render_device.get_render_pass(), 1).unwrap(),
+    );
 
     event_loop.run(move |event, _, control_flow| {
         gui.update(&event);
         match event {
-            Event::DeviceEvent { device_id, event } => {
-                match event {
-                    DeviceEvent::MouseMotion { delta } => {
-                        if lb_pressed == ElementState::Pressed {
-                            let rotation = &mut camera.transform.rotation;
-                            rotation.x = (rotation.x + delta.1.to_radians() as f32).clamp(-89.9f32.to_radians(), 89.0f32.to_radians());
-                            rotation.y -= (delta.0 as f32).to_radians();
-                            rotation.z = 0.0;
-                        }
+            Event::DeviceEvent {
+                device_id: _,
+                event,
+            } => match event {
+                DeviceEvent::MouseMotion { delta } => {
+                    if lb_pressed == ElementState::Pressed {
+                        let rotation = &mut camera.transform.rotation;
+                        rotation.x = (rotation.x + delta.1.to_radians() as f32)
+                            .clamp(-89.9f32.to_radians(), 89.0f32.to_radians());
+                        rotation.y -= (delta.0 as f32).to_radians();
+                        rotation.z = 0.0;
                     }
-                    _ => {}
                 }
-            }
-            Event::WindowEvent { window_id, event } => {
-                match event {
-                    WindowEvent::CloseRequested => {
-                        *control_flow = ControlFlow::Exit;
-                    }
-                    WindowEvent::KeyboardInput { device_id, input, is_synthetic } => {
-                        if let Some(virtual_keycode) = input.virtual_keycode {
-                            match virtual_keycode {
-                                VirtualKeyCode::W => {
-                                    w_pressed = input.state;
-                                }
-                                VirtualKeyCode::S => {
-                                    s_pressed = input.state;
-                                }
-                                VirtualKeyCode::A => {
-                                    a_pressed = input.state;
-                                }
-                                VirtualKeyCode::D => {
-                                    d_pressed = input.state;
-                                }
-                                _ => {}
+                _ => {}
+            },
+            Event::WindowEvent {
+                window_id: _,
+                event,
+            } => match event {
+                WindowEvent::CloseRequested => {
+                    *control_flow = ControlFlow::Exit;
+                }
+                WindowEvent::KeyboardInput {
+                    device_id: _,
+                    input,
+                    is_synthetic: _,
+                } => {
+                    if let Some(virtual_keycode) = input.virtual_keycode {
+                        match virtual_keycode {
+                            VirtualKeyCode::W => {
+                                w_pressed = input.state;
                             }
-                        }
-                    }
-                    WindowEvent::MouseInput { device_id, state, button, .. } => {
-                        match button {
-                            MouseButton::Left => {
-                                lb_pressed = state;
+                            VirtualKeyCode::S => {
+                                s_pressed = input.state;
+                            }
+                            VirtualKeyCode::A => {
+                                a_pressed = input.state;
+                            }
+                            VirtualKeyCode::D => {
+                                d_pressed = input.state;
                             }
                             _ => {}
                         }
                     }
-                    _ => {}
                 }
-            }
+                WindowEvent::MouseInput {
+                    device_id: _,
+                    state,
+                    button,
+                    ..
+                } => match button {
+                    MouseButton::Left => {
+                        lb_pressed = state;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            },
             Event::RedrawEventsCleared => {
                 // let now = Instant::now();
                 // let duration = now - start;
@@ -322,9 +341,8 @@ Vulkan(o) is hard, that I know...
                 gui.immediate_ui(|gui| {
                     let ctx = gui.context();
                     egui::Window::new("Settings").show(&ctx, |ui| {
-                        &ctx.settings_ui(ui);
+                        let _ = &ctx.settings_ui(ui);
                     });
-
                 });
 
                 let elapsed = start.elapsed();
@@ -354,7 +372,7 @@ Vulkan(o) is hard, that I know...
                     proj: proj.into(),
                 };
 
-                let (image_num, suboptimal, acquire_future) =
+                let (image_num, _suboptimal, acquire_future) =
                     match swapchain::acquire_next_image(render_device.get_swap_chain(), None) {
                         Ok(r) => r,
                         Err(AcquireError::OutOfDate) => {
@@ -370,7 +388,7 @@ Vulkan(o) is hard, that I know...
                     render_device.get_render_queue().family(),
                     CommandBufferUsage::OneTimeSubmit,
                 )
-                    .unwrap();
+                .unwrap();
 
                 builder
                     .begin_render_pass(
@@ -385,7 +403,7 @@ Vulkan(o) is hard, that I know...
                     CommandBufferUsage::MultipleSubmit,
                     Subpass::from(render_device.get_render_pass(), 0).unwrap(),
                 )
-                    .unwrap();
+                .unwrap();
                 secondary_builder
                     .push_constants(pipeline.layout().clone(), 0, uniform_data)
                     .bind_pipeline_graphics(pipeline.clone())
@@ -396,13 +414,26 @@ Vulkan(o) is hard, that I know...
                         set.clone(),
                     )
                     .set_viewport(0, [render_device.get_viewport()])
-                    .bind_vertex_buffers(0, (vertex_buffer.clone(), normal_buffer.clone(), texcoords_buffer.clone()))
+                    .bind_vertex_buffers(
+                        0,
+                        (
+                            vertex_buffer.clone(),
+                            normal_buffer.clone(),
+                            texcoords_buffer.clone(),
+                        ),
+                    )
                     .bind_index_buffer(index_buffer.clone())
                     .draw_indexed(index_buffer.len() as u32, 1, 0, 0, 0)
                     .unwrap();
-                builder.execute_commands(secondary_builder.build().unwrap()).unwrap()
-                    .next_subpass(SubpassContents::SecondaryCommandBuffers).unwrap()
-                    .execute_commands(gui.draw_on_subpass_image(render_device.get_images()[0].dimensions().width_height())).unwrap()
+                builder
+                    .execute_commands(secondary_builder.build().unwrap())
+                    .unwrap()
+                    .next_subpass(SubpassContents::SecondaryCommandBuffers)
+                    .unwrap()
+                    .execute_commands(gui.draw_on_subpass_image(
+                        render_device.get_images()[0].dimensions().width_height(),
+                    ))
+                    .unwrap()
                     .end_render_pass()
                     .unwrap();
 
@@ -415,12 +446,16 @@ Vulkan(o) is hard, that I know...
                     .join(acquire_future)
                     .then_execute(render_device.get_render_queue(), command_buffer)
                     .unwrap()
-                    .then_swapchain_present(render_device.get_render_queue(), render_device.get_swap_chain(), image_num)
+                    .then_swapchain_present(
+                        render_device.get_render_queue(),
+                        render_device.get_swap_chain(),
+                        image_num,
+                    )
                     .then_signal_fence_and_flush();
 
                 match future {
                     Ok(future) => {
-                        future.wait(None);
+                        future.wait(None).unwrap();
                         previous_frame_end = Some(future.boxed());
                     }
                     Err(FlushError::OutOfDate) => {
